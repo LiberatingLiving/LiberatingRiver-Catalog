@@ -28,8 +28,6 @@ Each row represents a single piece of published media.
 
 Example structure:
 
-Title            Media Type      Format            Series                           Pillar                  Month              Publish Date       Primary Link
-Episode Title    Podcast         Podcast Video     The Liberating River Podcast     Spiritual Alignment     February 2026      2026-02-12         YouTube URL
 <table>
 <thead>
 <tr>
