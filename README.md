@@ -8,11 +8,13 @@ The catalog serves as the structured dataset that powers the Content Catalog pag
 Purpose
 
 The catalog tracks all publicly released content including:
-	•	Podcast video episodes
+<div style="padding-left: 24px;">
+	<p>•	Podcast video episodes</p>
 	•	Podcast audio episodes
 	•	Podcast clips
 	•	YouTube Shorts
 	•	Special standalone videos
+</div>
 
 It allows content to be indexed, filtered, and displayed on the website so listeners can easily explore the library of teachings and media.
 
