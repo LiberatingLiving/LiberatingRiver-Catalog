@@ -13,9 +13,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      TRL_CHANNEL_VIDEOS_URL: ${{ secrets.TRL_CHANNEL_VIDEOS_URL }}
-      TRL_CHANNEL_SHORTS_URL: ${{ secrets.TRL_CHANNEL_SHORTS_URL }}
-      TRL_PODBEAN_FEED_URL: ${{ secrets.TRL_PODBEAN_FEED_URL }}
+      CHANNEL_VIDEOS_URL: ${{ secrets.CHANNEL_VIDEOS_URL }}
+      CHANNEL_SHORTS_URL: ${{ secrets.CHANNEL_SHORTS_URL }}
+      PODBEAN_FEED_URL: ${{ secrets.PODBEAN_FEED_URL }}
 
     steps:
       - name: Check out repo
