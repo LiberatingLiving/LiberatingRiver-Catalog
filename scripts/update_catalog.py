@@ -5,6 +5,7 @@ import csv
 import json
 import os
 import re
+from notion-client import Client
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -21,12 +22,30 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_CSV = REPO_ROOT / "TLR_Catalog.csv"
 
 # Set these in GitHub Actions or locally in your shell
+NOTION_TOKEN = os.getenv("NOTION_TOKEN")
+DATABASE_ID = "30c96882d77280278554cacf32360f88"
+notion = Client(auth=NOTION_TOKEN)
+
 CHANNEL_VIDEOS_URL = os.getenv("CHANNEL_VIDEOS_URL", "").strip()
 CHANNEL_SHORTS_URL = os.getenv("CHANNEL_SHORTS_URL", "").strip()
 PODBEAN_FEED_URL = os.getenv("PODBEAN_FEED_URL", "").strip()
 
 WATCH_RE = re.compile(r"^https?://(www\.)?youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")
 SHORTS_RE = re.compile(r"^https?://(www\.)?youtube\.com/shorts/([A-Za-z0-9_-]{11})")
+
+
+# =========================
+# NOTION FUNCTIONS
+# =========================
+
+def get_existing_items():
+    # read database
+
+def add_new_item():
+    # insert row
+
+def update_existing_item():
+    # optional later
 
 
 # =========================================================
