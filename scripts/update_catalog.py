@@ -606,6 +606,27 @@ def sync_new_rows_to_notion(rows: List[Dict[str, str]]) -> int:
 
     return inserted
 
+def test_single_notion_insert():
+    test_row = {
+        "Title": "TEST - Notion Sync Check",
+        "Publish Date": "March 20, 2026",
+        "Format": "Special Video",
+        "Series": "Reflections",
+        "Pillar": "General",
+        "Episode Number": "",
+        "Episode Part": "",
+        "YouTube URL": "",
+        "Duration": "00:30",
+        "Podbean Link": "",
+        "Podbean Embeddable Link": "",
+        "Video ID": "TEST-123",
+        "Summary": "Test row from automation.",
+        "Featured": "No"
+    }
+
+    add_row_to_notion(test_row)
+    print("Single test row inserted.")
+
 
 # =========================================================
 # PRESERVE MANUAL FIELDS
@@ -776,23 +797,33 @@ def write_catalog(rows: List[Dict[str, str]], output_csv: Path) -> None:
             writer.writerow(clean_row)
 
 
-def main() -> None:
-    rows = asyncio.run(build_catalog())
+# def main() -> None:
+#     rows = asyncio.run(build_catalog())
 
+#     print("NOTION_TOKEN loaded:", bool(NOTION_TOKEN))
+#     print("DATABASE_ID:", DATABASE_ID)
+#     print("notion_ready():", notion_ready())
+
+#     try:
+#         if notion_ready():
+#             inserted_count = sync_new_rows_to_notion(rows)
+#             print(f"Inserted {inserted_count} new row(s) into Notion.")
+#         else:
+#             print("Notion not configured; skipping Notion sync.")
+
+#     except Exception as e:
+#         print("NOTION SYNC ERROR:", repr(e))
+    
+#     write_catalog(rows, OUTPUT_CSV)
+#     print(f"Updated catalog: {OUTPUT_CSV}")
+#     print(f"Rows written: {len(rows)}")
+
+def main() -> None:
     print("NOTION_TOKEN loaded:", bool(NOTION_TOKEN))
     print("DATABASE_ID:", DATABASE_ID)
     print("notion_ready():", notion_ready())
-    
-    if notion_ready():
-        inserted_count = sync_new_rows_to_notion(rows)
-        print(f"Inserted {inserted_count} new row(s) into Notion.")
-    else:
-        print("Notion not configured; skipping Notion sync.")
-        
-    write_catalog(rows, OUTPUT_CSV)
-    print(f"Updated catalog: {OUTPUT_CSV}")
-    print(f"Rows written: {len(rows)}")
 
+    test_single_notion_insert()
 
 if __name__ == "__main__":
     main()
