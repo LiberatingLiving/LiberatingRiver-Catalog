@@ -779,11 +779,16 @@ def write_catalog(rows: List[Dict[str, str]], output_csv: Path) -> None:
 def main() -> None:
     rows = asyncio.run(build_catalog())
 
+    print("NOTION_TOKEN loaded:", bool(NOTION_TOKEN))
+    print("DATABASE_ID:", DATABASE_ID)
+    print("notion_ready():", notion_ready())
+    
     if notion_ready():
         inserted_count = sync_new_rows_to_notion(rows)
         print(f"Inserted {inserted_count} new row(s) into Notion.")
     else:
         print("Notion not configured; skipping Notion sync.")
+        
     write_catalog(rows, OUTPUT_CSV)
     print(f"Updated catalog: {OUTPUT_CSV}")
     print(f"Rows written: {len(rows)}")
