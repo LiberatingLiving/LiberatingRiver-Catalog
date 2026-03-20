@@ -24,7 +24,7 @@ OUTPUT_CSV = REPO_ROOT / "TLR_Catalog.csv"
 # Set these in GitHub Actions or locally in your shell
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = "30c96882d77280278554cacf32360f88"
-notion = Client(auth=NOTION_TOKEN)
+notion = Client(auth=NOTION_TOKEN) if NOTION_TOKEN else None
 
 CHANNEL_VIDEOS_URL = os.getenv("CHANNEL_VIDEOS_URL", "").strip()
 CHANNEL_SHORTS_URL = os.getenv("CHANNEL_SHORTS_URL", "").strip()
@@ -32,20 +32,6 @@ PODBEAN_FEED_URL = os.getenv("PODBEAN_FEED_URL", "").strip()
 
 WATCH_RE = re.compile(r"^https?://(www\.)?youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")
 SHORTS_RE = re.compile(r"^https?://(www\.)?youtube\.com/shorts/([A-Za-z0-9_-]{11})")
-
-
-# =========================
-# NOTION FUNCTIONS
-# =========================
-
-def get_existing_items():
-    # read database
-
-def add_new_item():
-    # insert row
-
-def update_existing_item():
-    # optional later
 
 
 # =========================================================
@@ -351,6 +337,277 @@ def fetch_podbean_audio() -> List[Dict[str, str]]:
 
 
 # =========================================================
+# NOTION FUNCTIONS
+# =========================================================
+
+def notion_ready() -> bool:
+    return bool(NOTION_TOKEN and DATABASE_ID and notion)
+
+def query_all_notion_rows(database_id: str) -> List[Dict]:
+    """
+    Fetch all rows from a Notion database, handling pagination.
+    """
+    if not notion_ready():
+        raise ValueError("Notion is not configured. Check NOTION_TOKEN and DATABASE_ID.")
+
+    results = []
+    has_more = True
+    next_cursor = None
+
+    while has_more:
+        response = notion.databases.query(
+            database_id=database_id,
+            start_cursor=next_cursor
+        ) if next_cursor else notion.databases.query(
+            database_id=database_id
+        )
+
+        results.extend(response.get("results", []))
+        has_more = response.get("has_more", False)
+        next_cursor = response.get("next_cursor")
+
+    return results
+
+def get_existing_titles() -> Set[str]:
+    """
+    Return a set of existing Notion titles.
+    """
+    rows = query_all_notion_rows(DATABASE_ID)
+    titles = set()
+
+    for row in rows:
+        title_property = row["properties"].get("Title", {}).get("title", [])
+        if title_property:
+            # Concatenate title fragments safely
+            title_text = "".join(
+                part.get("plain_text", "")
+                for part in title_property
+            ).strip()
+            if title_text:
+                titles.add(title_text)
+
+    return titles
+
+def get_existing_video_ids() -> Set[str]:
+    """
+    Return a set of existing Video IDs already stored in Notion.
+    """
+    rows = query_all_notion_rows(DATABASE_ID)
+    video_ids = set()
+
+    for row in rows:
+        prop = row["properties"].get("Video ID", {})
+        rich_text = prop.get("rich_text", [])
+        if rich_text:
+            video_id = "".join(
+                part.get("plain_text", "")
+                for part in rich_text
+            ).strip()
+            if video_id:
+                video_ids.add(video_id)
+
+    return video_ids
+
+def pretty_to_iso(date_str: str) -> str:
+    """
+    Convert 'February 18, 2026' -> '2026-02-18'
+    """
+    if not date_str:
+        return ""
+    try:
+        return datetime.strptime(date_str.strip(), "%B %d, %Y").strftime("%Y-%m-%d")
+    except Exception:
+        try:
+            return datetime.strptime(date_str.strip(), "%B %-d, %Y").strftime("%Y-%m-%d")
+        except Exception:
+            return date_str
+
+def safe_select(value: str) -> Optional[Dict]:
+    value = (value or "").strip()
+    if not value:
+        return None
+    return {"name": value}
+
+def safe_multi_select(value: str) -> List[Dict]:
+    """
+    Convert a single value or comma-separated string into Notion multi_select format.
+    """
+    value = (value or "").strip()
+    if not value:
+        return []
+
+    parts = [v.strip() for v in value.split(",") if v.strip()]
+    return [{"name": part} for part in parts]
+
+def safe_rich_text(value: str) -> List[Dict]:
+    """
+    Build Notion rich_text safely.
+    """
+    value = (value or "").strip()
+    if not value:
+        return []
+    return [
+        {
+            "type": "text",
+            "text": {
+                "content": value[:2000]  # Notion text block safety
+            }
+        }
+    ]
+
+def safe_title(value: str) -> List[Dict]:
+    """
+    Build Notion title property safely.
+    """
+    value = (value or "").strip()
+    if not value:
+        value = "Untitled"
+    return [
+        {
+            "type": "text",
+            "text": {
+                "content": value[:2000]
+            }
+        }
+    ]
+
+def build_notion_properties(row: Dict[str, str]) -> Dict:
+    """
+    Convert one catalog row into a Notion properties payload.
+    This version mataches the actual Notion property types.
+    Assumes your database property names match your catalog columns.
+    """
+    props = {
+        "Title": {
+            "title": safe_title(row.get("Title", ""))
+        },
+
+        "Publish Date": {
+            "date": {"start": pretty_to_iso(row.get("Publish Date", ""))} if row.get("Publish Date") else None
+        },
+
+        "Format": {
+            "select": safe_select(row.get("Format", ""))
+        },
+
+        # Media Type is a FORMULA in your database
+        # Do not write to it
+
+        "Series": {
+            "select": safe_select(row.get("Series", ""))
+        },
+
+        "Pillar": {
+            "select": safe_select(row.get("Pillar", ""))
+        },
+
+        # Month is likely a formula in your database
+        # Do not write to it
+
+        "Episode Number": {
+            "number": int(float(row["Episode Number"])) if str(row.get("Episode Number", "")).strip() else None
+        },
+
+        # Episode Part is MULTI-SELECT
+        "Episode Part": {
+            "multi_select": safe_multi_select(row.get("Episode Part", ""))
+        },
+
+        # Primary Link is a FORMULA in your database
+        # Do not write to it
+
+        "YouTube URL": {
+            "url": row.get("YouTube URL", "") or None
+        },
+
+        "Duration": {
+            "rich_text": safe_rich_text(row.get("Duration", ""))
+        },
+
+        "Podbean Link": {
+            "url": row.get("Podbean Link", "") or None
+        },
+
+        "Podbean Embeddable Link": {
+            "url": row.get("Podbean Embeddable Link", "") or None
+        },
+
+        "Video ID": {
+            "rich_text": safe_rich_text(row.get("Video ID", ""))
+        },
+
+        "Summary": {
+            "rich_text": safe_rich_text(row.get("Summary", ""))
+        },
+
+        # Featured is CHECKBOX
+        "Featured": {
+            "checkbox": str(row.get("Featured", "")).strip().lower() in {"yes", "true", "1"}
+        }
+    }
+
+    # Remove properties that ended up as None in invalid spots
+    clean_props = {}
+    for key, value in props.items():
+        if isinstance(value, dict):
+            # Keep date/url/number/select/title/rich_text structures intact
+            clean_props[key] = value
+
+    return clean_props
+
+def add_row_to_notion(row: Dict[str, str]) -> None:
+    """
+    Insert a new row into the Notion database.
+    """
+    if not notion_ready():
+        raise ValueError("Notion is not configured. Check NOTION_TOKEN and DATABASE_ID.")
+
+    properties = build_notion_properties(row)
+
+    notion.pages.create(
+        parent={"database_id": DATABASE_ID},
+        properties=properties
+    )
+
+
+def sync_new_rows_to_notion(rows: List[Dict[str, str]]) -> int:
+    """
+    Add only new rows to Notion.
+    Uses Video ID first when available, then falls back to Title.
+    Returns count of rows inserted.
+    """
+    if not notion_ready():
+        raise ValueError("Notion is not configured. Check NOTION_TOKEN and DATABASE_ID.")
+
+    existing_titles = get_existing_titles()
+    existing_video_ids = get_existing_video_ids()
+
+    inserted = 0
+
+    for row in rows:
+        title = (row.get("Title", "") or "").strip()
+        video_id = (row.get("Video ID", "") or "").strip()
+
+        # Prefer video ID when available
+        if video_id and video_id in existing_video_ids:
+            continue
+
+        # Fallback to title if no video ID
+        if not video_id and title in existing_titles:
+            continue
+
+        add_row_to_notion(row)
+        inserted += 1
+
+        if video_id:
+            existing_video_ids.add(video_id)
+        if title:
+            existing_titles.add(title)
+
+    return inserted
+
+
+# =========================================================
 # PRESERVE MANUAL FIELDS
 # =========================================================
 
@@ -521,6 +778,12 @@ def write_catalog(rows: List[Dict[str, str]], output_csv: Path) -> None:
 
 def main() -> None:
     rows = asyncio.run(build_catalog())
+
+    if notion_ready():
+        inserted_count = sync_new_rows_to_notion(rows)
+        print(f"Inserted {inserted_count} new row(s) into Notion.")
+    else:
+        print("Notion not configured; skipping Notion sync.")
     write_catalog(rows, OUTPUT_CSV)
     print(f"Updated catalog: {OUTPUT_CSV}")
     print(f"Rows written: {len(rows)}")
