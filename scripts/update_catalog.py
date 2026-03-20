@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_CSV = REPO_ROOT / "TLR_Catalog.csv"
 
 # Set these in GitHub Actions or locally in your shell
-NOTION_TOKEN = os.getenv("NOTION_TOKEN")
+NOTION_TOKEN = os.getenv("NOTION_TOKEN", "").strip()
 DATABASE_ID = "30c96882d77280278554cacf32360f88"
 notion = Client(auth=NOTION_TOKEN) if NOTION_TOKEN else None
 
@@ -343,6 +343,69 @@ def fetch_podbean_audio() -> List[Dict[str, str]]:
 def notion_ready() -> bool:
     return bool(NOTION_TOKEN and DATABASE_ID and notion)
 
+def pretty_to_iso(date_str: str) -> str:
+    """
+    Convert 'February 18, 2026' -> '2026-02-18'
+    """
+    if not date_str:
+        return ""
+    try:
+        return datetime.strptime(date_str.strip(), "%B %d, %Y").strftime("%Y-%m-%d")
+    except Exception:
+        try:
+            return datetime.strptime(date_str.strip(), "%B %-d, %Y").strftime("%Y-%m-%d")
+        except Exception:
+            return date_str
+
+def safe_select(value: str) -> Optional[Dict]:
+    value = (value or "").strip()
+    if not value:
+        return None
+    return {"name": value}
+
+def safe_multi_select(value: str) -> List[Dict]:
+    """
+    Convert a single value or comma-separated string into Notion multi_select format.
+    """
+    value = (value or "").strip()
+    if not value:
+        return []
+
+    parts = [v.strip() for v in value.split(",") if v.strip()]
+    return [{"name": part} for part in parts]
+
+def safe_rich_text(value: str) -> List[Dict]:
+    """
+    Build Notion rich_text safely.
+    """
+    value = (value or "").strip()
+    if not value:
+        return []
+    return [
+        {
+            "type": "text",
+            "text": {
+                "content": value[:2000]  # Notion text block safety
+            }
+        }
+    ]
+
+def safe_title(value: str) -> List[Dict]:
+    """
+    Build Notion title property safely.
+    """
+    value = (value or "").strip()
+    if not value:
+        value = "Untitled"
+    return [
+        {
+            "type": "text",
+            "text": {
+                "content": value[:2000]
+            }
+        }
+    ]
+
 def query_all_notion_rows(database_id: str) -> List[Dict]:
     """
     Fetch all rows from a Notion database, handling pagination.
@@ -407,69 +470,6 @@ def get_existing_video_ids() -> Set[str]:
                 video_ids.add(video_id)
 
     return video_ids
-
-def pretty_to_iso(date_str: str) -> str:
-    """
-    Convert 'February 18, 2026' -> '2026-02-18'
-    """
-    if not date_str:
-        return ""
-    try:
-        return datetime.strptime(date_str.strip(), "%B %d, %Y").strftime("%Y-%m-%d")
-    except Exception:
-        try:
-            return datetime.strptime(date_str.strip(), "%B %-d, %Y").strftime("%Y-%m-%d")
-        except Exception:
-            return date_str
-
-def safe_select(value: str) -> Optional[Dict]:
-    value = (value or "").strip()
-    if not value:
-        return None
-    return {"name": value}
-
-def safe_multi_select(value: str) -> List[Dict]:
-    """
-    Convert a single value or comma-separated string into Notion multi_select format.
-    """
-    value = (value or "").strip()
-    if not value:
-        return []
-
-    parts = [v.strip() for v in value.split(",") if v.strip()]
-    return [{"name": part} for part in parts]
-
-def safe_rich_text(value: str) -> List[Dict]:
-    """
-    Build Notion rich_text safely.
-    """
-    value = (value or "").strip()
-    if not value:
-        return []
-    return [
-        {
-            "type": "text",
-            "text": {
-                "content": value[:2000]  # Notion text block safety
-            }
-        }
-    ]
-
-def safe_title(value: str) -> List[Dict]:
-    """
-    Build Notion title property safely.
-    """
-    value = (value or "").strip()
-    if not value:
-        value = "Untitled"
-    return [
-        {
-            "type": "text",
-            "text": {
-                "content": value[:2000]
-            }
-        }
-    ]
 
 def build_notion_properties(row: Dict[str, str]) -> Dict:
     """
