@@ -1,0 +1,1 @@
+print("Catalog updater placeholder")
