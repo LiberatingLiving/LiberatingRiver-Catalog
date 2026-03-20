@@ -9,12 +9,17 @@ permissions:
   contents: write
 
 jobs:
-  update-catalog:
+  update:
     runs-on: ubuntu-latest
 
+    env:
+      CHANNEL_VIDEOS_URL: ${{ secrets.CHANNEL_VIDEOS_URL }}
+      CHANNEL_SHORTS_URL: ${{ secrets.CHANNEL_SHORTS_URL }}
+      PODBEAN_FEED_URL: ${{ secrets.PODBEAN_FEED_URL }}
+
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
+      - name: Check out repo
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -25,22 +30,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
 
-      - name: Run catalog updater
+      - name: Run updater
         run: |
           python scripts/update_catalog.py
 
-      - name: Commit updated catalog if changed
+      - name: Commit changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add TLR_Catalog.csv
-          git add catalog.json || true
 
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "Auto-update content catalog"
+            git commit -m "Auto-update catalog"
             git push
           fi
