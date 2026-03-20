@@ -4,11 +4,14 @@ import asyncio
 import csv
 import json
 import os
-import re
-from notion-client import Client
+
+import re, time
+
+from notion_client import Client
+
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, cast
 
 import feedparser
 import pandas as pd
@@ -301,15 +304,40 @@ def fetch_podbean_audio() -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
 
     for entry in feed.entries:
-        title = entry.get("title", "").strip()
-        link = entry.get("link", "").strip()
-        audio_file = get_enclosure_url(entry).strip()
+        title = str(entry.get("title") or "").strip()
+        link = str(entry.get("link") or "").strip()
+        audio_file = str(get_enclosure_url(entry) or "").strip()
+
+        # published = ""
+        # if entry.get("published_parsed"):
+        #     published = datetime(*entry.published_parsed[:6]).strftime("%Y-%m-%d")
+        # elif entry.get("updated_parsed"):
+        #     published = datetime(*entry.updated_parsed[:6]).strftime("%Y-%m-%d")
+
 
         published = ""
+
         if entry.get("published_parsed"):
-            published = datetime(*entry.published_parsed[:6]).strftime("%Y-%m-%d")
+            pp = cast(time.struct_time, entry.published_parsed)
+            published = datetime(
+                pp.tm_year,
+                pp.tm_mon,
+                pp.tm_mday,
+                pp.tm_hour,
+                pp.tm_min,
+                pp.tm_sec
+            ).strftime("%Y-%m-%d")
+
         elif entry.get("updated_parsed"):
-            published = datetime(*entry.updated_parsed[:6]).strftime("%Y-%m-%d")
+            up = cast(time.struct_time, entry.updated_parsed)
+            published = datetime(
+                up.tm_year,
+                up.tm_mon,
+                up.tm_mday,
+                up.tm_hour,
+                up.tm_min,
+                up.tm_sec
+            ).strftime("%Y-%m-%d")
 
         row = {
             "Title": title,
@@ -342,6 +370,13 @@ def fetch_podbean_audio() -> List[Dict[str, str]]:
 
 def notion_ready() -> bool:
     return bool(NOTION_TOKEN and DATABASE_ID and notion)
+
+
+def get_notion_client() -> Client:
+    if notion is None:
+        raise ValueError("Notion client is not configured.")
+    return cast(Client, notion)
+
 
 def pretty_to_iso(date_str: str) -> str:
     """
@@ -407,24 +442,30 @@ def safe_title(value: str) -> List[Dict]:
     ]
 
 def query_all_notion_rows(database_id: str) -> List[Dict]:
-    """
-    Fetch all rows from a Notion database, handling pagination.
-    """
+
     if not notion_ready():
         raise ValueError("Notion is not configured. Check NOTION_TOKEN and DATABASE_ID.")
 
+    client = get_notion_client()
+    
     results = []
     has_more = True
     next_cursor = None
 
     while has_more:
-        response = notion.databases.query(
-            database_id=database_id,
-            start_cursor=next_cursor
-        ) if next_cursor else notion.databases.query(
-            database_id=database_id
-        )
 
+        if next_cursor:
+            response = client.databases.query(
+                database_id=database_id,
+                start_cursor=next_cursor
+            )
+        else:
+            response = client.databases.query(
+                database_id=database_id
+            )
+
+        response = cast(dict, response)
+        
         results.extend(response.get("results", []))
         has_more = response.get("has_more", False)
         next_cursor = response.get("next_cursor")
@@ -561,10 +602,12 @@ def add_row_to_notion(row: Dict[str, str]) -> None:
     """
     if not notion_ready():
         raise ValueError("Notion is not configured. Check NOTION_TOKEN and DATABASE_ID.")
-
+    
+    client = get_notion_client()
     properties = build_notion_properties(row)
 
-    notion.pages.create(
+    client.pages.create(
+
         parent={"database_id": DATABASE_ID},
         properties=properties
     )
@@ -693,7 +736,7 @@ def preserve_manual_fields(new_rows: List[Dict[str, str]], existing_csv: Path) -
 
     lookup: Dict[str, Dict[str, str]] = {}
     for row in existing_records:
-        lookup[existing_lookup_key(row)] = row
+        lookup[existing_lookup_key(row)] = row # type: ignore
 
     merged: List[Dict[str, str]] = []
     for row in new_rows:
@@ -827,3 +870,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
