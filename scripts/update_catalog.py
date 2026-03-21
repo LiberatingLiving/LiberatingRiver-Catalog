@@ -4,14 +4,14 @@ import asyncio
 import csv
 import json
 import os
-
+import traceback
 import re, time
 
 from notion_client import Client
 
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, cast
+from typing import Any, Dict, List, Optional, Set, Tuple, cast
 
 import feedparser
 import pandas as pd
@@ -243,13 +243,14 @@ async def scrape_youtube(channel_tab_url: str, format_name: str, media_type: str
 
         for vid in video_ids:
             meta = await fetch_video_metadata(page, vid)
+            series = detect_series(format_name)
 
             row = {
                 "Title": meta["title"],
                 "Publish Date": yyyymmdd_to_pretty(meta["publish_date"]),
                 "Format": format_name,
                 "Media Type": media_type,
-                "Series": "",
+                "Series": series,
                 "Pillar": "",
                 "Month": yyyymmdd_to_month(meta["publish_date"]),
                 "Episode Number": "",
@@ -307,13 +308,6 @@ def fetch_podbean_audio() -> List[Dict[str, str]]:
         title = str(entry.get("title") or "").strip()
         link = str(entry.get("link") or "").strip()
         audio_file = str(get_enclosure_url(entry) or "").strip()
-
-        # published = ""
-        # if entry.get("published_parsed"):
-        #     published = datetime(*entry.published_parsed[:6]).strftime("%Y-%m-%d")
-        # elif entry.get("updated_parsed"):
-        #     published = datetime(*entry.updated_parsed[:6]).strftime("%Y-%m-%d")
-
 
         published = ""
 
@@ -441,36 +435,60 @@ def safe_title(value: str) -> List[Dict]:
         }
     ]
 
-def query_all_notion_rows(database_id: str) -> List[Dict]:
-
+def get_data_source_id(database_id: str) -> str:
+    """
+    Retrieve the first data source ID from a Notion database.
+    """
     if not notion_ready():
         raise ValueError("Notion is not configured. Check NOTION_TOKEN and DATABASE_ID.")
 
     client = get_notion_client()
-    
-    results = []
+    db = cast(Dict[str, Any], client.databases.retrieve(database_id=database_id))
+    data_sources = cast(List[Dict[str, Any]], db.get("data_sources", []))
+
+    if not data_sources:
+        raise ValueError("No data source found for this database.")
+
+    return data_sources[0]["id"]
+
+
+
+
+def query_all_notion_rows(database_id: str) -> List[Dict]:
+    """
+    Fetch all rows from a Notion database using its data source.
+    """
+    if not notion_ready():
+        raise ValueError("Notion is not configured. Check NOTION_TOKEN and DATABASE_ID.")
+
+    client = get_notion_client()
+    data_source_id = get_data_source_id(database_id)
+
+    results: List[Dict[str, Any]] = []
     has_more = True
     next_cursor = None
 
     while has_more:
 
         if next_cursor:
-            response = client.databases.query(
-                database_id=database_id,
+            response = client.data_sources.query(
+                data_source_id=data_source_id,
                 start_cursor=next_cursor
             )
         else:
-            response = client.databases.query(
-                database_id=database_id
+            response = client.data_sources.query(
+                data_source_id=data_source_id
             )
 
-        response = cast(dict, response)
-        
-        results.extend(response.get("results", []))
-        has_more = response.get("has_more", False)
-        next_cursor = response.get("next_cursor")
+
+        response = cast(Dict[str, Any], response)
+
+        results.extend(cast(List[Dict[str, Any]], response.get("results", [])))
+        has_more = cast(bool, response.get("has_more", False))
+        next_cursor = cast(Optional[str], response.get("next_cursor"))
 
     return results
+
 
 def get_existing_titles() -> Set[str]:
     """
@@ -649,27 +667,6 @@ def sync_new_rows_to_notion(rows: List[Dict[str, str]]) -> int:
 
     return inserted
 
-def test_single_notion_insert():
-    test_row = {
-        "Title": "TEST - Notion Sync Check",
-        "Publish Date": "March 20, 2026",
-        "Format": "Special Video",
-        "Series": "Reflections",
-        "Pillar": "General",
-        "Episode Number": "",
-        "Episode Part": "",
-        "YouTube URL": "",
-        "Duration": "00:30",
-        "Podbean Link": "",
-        "Podbean Embeddable Link": "",
-        "Video ID": "TEST-123",
-        "Summary": "Test row from automation.",
-        "Featured": "No"
-    }
-
-    add_row_to_notion(test_row)
-    print("Single test row inserted.")
-
 
 # =========================================================
 # PRESERVE MANUAL FIELDS
@@ -787,6 +784,33 @@ def finalize_formats(row: Dict[str, str]) -> None:
 # MAIN
 # =========================================================
 
+# =========================================================
+# CLASSIFICATION FUNCTIONS   
+# =========================================================
+
+def detect_series(format_name: str) -> str:
+
+    format_name = (format_name or "").strip()
+
+    if format_name in {"Podcast Video (YouTube)", "Podcast Audio (Podbean)"}:
+        return "The Liberating River"
+
+    if format_name == "Podcast Clip":
+        return "Podcast Insight"
+
+    if format_name == "YouTube Short":
+        return "The Book of Flo"
+
+    if format_name == "Special Video":
+        return "Reflections"
+
+    return ""
+
+# =========================================================
+# CATALOG BUILDING
+# =========================================================
+
+
 async def build_catalog() -> List[Dict[str, str]]:
     if not CHANNEL_VIDEOS_URL:
         raise ValueError("CHANNEL_VIDEOS_URL is not set.")
@@ -840,33 +864,34 @@ def write_catalog(rows: List[Dict[str, str]], output_csv: Path) -> None:
             writer.writerow(clean_row)
 
 
-# def main() -> None:
-#     rows = asyncio.run(build_catalog())
-
-#     print("NOTION_TOKEN loaded:", bool(NOTION_TOKEN))
-#     print("DATABASE_ID:", DATABASE_ID)
-#     print("notion_ready():", notion_ready())
-
-#     try:
-#         if notion_ready():
-#             inserted_count = sync_new_rows_to_notion(rows)
-#             print(f"Inserted {inserted_count} new row(s) into Notion.")
-#         else:
-#             print("Notion not configured; skipping Notion sync.")
-
-#     except Exception as e:
-#         print("NOTION SYNC ERROR:", repr(e))
-    
-#     write_catalog(rows, OUTPUT_CSV)
-#     print(f"Updated catalog: {OUTPUT_CSV}")
-#     print(f"Rows written: {len(rows)}")
-
 def main() -> None:
+    rows = asyncio.run(build_catalog())
+
     print("NOTION_TOKEN loaded:", bool(NOTION_TOKEN))
     print("DATABASE_ID:", DATABASE_ID)
     print("notion_ready():", notion_ready())
 
-    test_single_notion_insert()
+    try:
+        if notion_ready():
+            inserted_count = sync_new_rows_to_notion(rows)
+            print(f"Inserted {inserted_count} new row(s) into Notion.")
+        else:
+            print("Notion not configured; skipping Notion sync.")
+
+    except Exception as e:
+        print("NOTION SYNC ERROR:", repr(e))
+        traceback.print_exc()
+    
+    write_catalog(rows, OUTPUT_CSV)
+    print(f"Updated catalog: {OUTPUT_CSV}")
+    print(f"Rows written: {len(rows)}")
+
+# def main() -> None:
+#     print("NOTION_TOKEN loaded:", bool(NOTION_TOKEN))
+#     print("DATABASE_ID:", DATABASE_ID)
+#     print("notion_ready():", notion_ready())
+
+#     test_single_notion_insert()
 
 if __name__ == "__main__":
     main()
