@@ -786,7 +786,7 @@ def sync_rows_to_notion(rows: List[Dict[str, str]]) -> Dict[str, int]:
 # =========================================================
 
 MANUAL_FIELDS = [
-   "Pillar",
+    "Pillar",
     "Episode Number",
     "Episode Part",
     "Summary",
