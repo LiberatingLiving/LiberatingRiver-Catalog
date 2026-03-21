@@ -52,6 +52,28 @@ def extract_video_id(href: str) -> Optional[str]:
         return m.group(2)
     return None
 
+def duration_to_seconds(duration: str) -> int:
+    """
+    Convert HH:MM:SS or MM:SS duration to seconds.
+    """
+    if not duration:
+        return 0
+
+    parts = duration.split(":")
+
+    try:
+        if len(parts) == 3:
+            h, m, s = parts
+            return int(h)*3600 + int(m)*60 + int(s)
+
+        if len(parts) == 2:
+            m, s = parts
+            return int(m)*60 + int(s)
+
+    except:
+        return 0
+
+    return 0
 
 def build_watch_url(video_id: str) -> str:
     return f"https://www.youtube.com/watch?v={video_id}"
@@ -242,13 +264,29 @@ async def scrape_youtube(channel_tab_url: str, format_name: str, media_type: str
         results: List[Dict[str, str]] = []
 
         for vid in video_ids:
+
             meta = await fetch_video_metadata(page, vid)
-            series = detect_series(format_name)
+
+            title = meta["title"] or ""
+
+            # Determine if this is a short
+            duration_seconds = duration_to_seconds(meta.get("duration", ""))
+            is_short = duration_seconds < 90
+
+            # Detect correct format based on title + duration
+            detected_format = detect_format(
+                title,
+                duration_seconds,
+                is_short
+            )
+
+            # Detect series using updated format
+            series = detect_series(detected_format, title)
 
             row = {
-                "Title": meta["title"],
+                "Title": title,
                 "Publish Date": yyyymmdd_to_pretty(meta["publish_date"]),
-                "Format": format_name,
+                "Format": detected_format,
                 "Media Type": media_type,
                 "Series": series,
                 "Pillar": "",
@@ -265,6 +303,7 @@ async def scrape_youtube(channel_tab_url: str, format_name: str, media_type: str
                 "Featured": "No",
                 "_sort_date": meta["publish_date"],
             }
+
             results.append(row)
 
         await browser.close()
@@ -365,6 +404,8 @@ def fetch_podbean_audio() -> List[Dict[str, str]]:
 def notion_ready() -> bool:
     return bool(NOTION_TOKEN and DATABASE_ID and notion)
 
+def norm(value: str) -> str:
+    return (value or "").strip()
 
 def get_notion_client() -> Client:
     if notion is None:
@@ -434,6 +475,75 @@ def safe_title(value: str) -> List[Dict]:
             }
         }
     ]
+
+def extract_notion_comparable_fields(row: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Extract automation-owned fields from an existing Notion row
+    into a simple comparable dictionary.
+    """
+    props = row.get("properties", {})
+
+    def get_title(name: str) -> str:
+        parts = props.get(name, {}).get("title", [])
+        return "".join(part.get("plain_text", "") for part in parts).strip()
+
+    def get_rich_text(name: str) -> str:
+        parts = props.get(name, {}).get("rich_text", [])
+        return "".join(part.get("plain_text", "") for part in parts).strip()
+
+    def get_select(name: str) -> str:
+        select_obj = props.get(name, {}).get("select")
+        return select_obj.get("name", "").strip() if select_obj else ""
+
+    def get_url(name: str) -> str:
+        return (props.get(name, {}).get("url") or "").strip()
+
+    def get_date(name: str) -> str:
+        date_obj = props.get(name, {}).get("date")
+        return (date_obj.get("start", "") if date_obj else "").strip()
+
+    return {
+        "Title": get_title("Title"),
+        "Publish Date": get_date("Publish Date"),
+        "Format": get_select("Format"),
+        "Series": get_select("Series"),
+        "YouTube URL": get_url("YouTube URL"),
+        "Duration": get_rich_text("Duration"),
+        "Podbean Link": get_url("Podbean Link"),
+        "Podbean Embeddable Link": get_url("Podbean Embeddable Link"),
+        "Video ID": get_rich_text("Video ID"),
+    }
+
+def extract_row_comparable_fields(row: Dict[str, str]) -> Dict[str, str]:
+    """
+    Extract the automation-owned fields from the newly built row
+    in the same normalized format used for Notion comparison.
+    """
+    return {
+        "Title": norm(row.get("Title", "")),
+        "Publish Date": norm(pretty_to_iso(row.get("Publish Date", ""))),
+        "Format": norm(row.get("Format", "")),
+        "Series": norm(row.get("Series", "")),
+        "YouTube URL": norm(row.get("YouTube URL", "")),
+        "Duration": norm(row.get("Duration", "")),
+        "Podbean Link": norm(row.get("Podbean Link", "")),
+        "Podbean Embeddable Link": norm(row.get("Podbean Embeddable Link", "")),
+        "Video ID": norm(row.get("Video ID", "")),
+    }
+
+def row_needs_update(notion_row: Dict[str, Any], new_row: Dict[str, str]) -> bool:
+    """
+    Return True if any automation-owned field differs.
+    """
+    current = extract_notion_comparable_fields(notion_row)
+    incoming = extract_row_comparable_fields(new_row)
+
+    for key in incoming:
+        if current.get(key, "") != incoming.get(key, ""):
+            return True
+
+    return False
+
 
 def get_data_source_id(database_id: str) -> str:
     """
@@ -631,28 +741,62 @@ def add_row_to_notion(row: Dict[str, str]) -> None:
     )
 
 
-def get_existing_notion_pages() -> Dict[str, Dict[str, str]]:
+# def get_existing_notion_pages() -> Dict[str, Dict[str, str]]:
+#     """
+#     Return a lookup of existing Notion rows keyed by Video ID when available,
+#     otherwise by Title.
+
+#     Output example:
+#     {
+#         "VID::abc123": {"page_id": "...", "title": "...", "video_id": "..."},
+#         "TITLE::My Episode Title": {"page_id": "...", "title": "...", "video_id": ""},
+#     }
+#     """
+#     rows = query_all_notion_rows(DATABASE_ID)
+#     lookup: Dict[str, Dict[str, str]] = {}
+
+#     for row in rows:
+#         page_id = row.get("id", "")
+
+#         # Title
+#         title_prop = row["properties"].get("Title", {}).get("title", [])
+#         title = "".join(part.get("plain_text", "") for part in title_prop).strip()
+
+#         # Video ID
+#         video_prop = row["properties"].get("Video ID", {}).get("rich_text", [])
+#         video_id = "".join(part.get("plain_text", "") for part in video_prop).strip()
+
+#         record = {
+#             "page_id": page_id,
+#             "title": title,
+#             "video_id": video_id,
+#         }
+
+#         if video_id:
+#             lookup[f"VID::{video_id}"] = record
+
+#         if title:
+#             lookup[f"TITLE::{title}"] = record
+
+#     return lookup
+
+
+def get_existing_notion_pages() -> Dict[str, Dict[str, Any]]:
     """
     Return a lookup of existing Notion rows keyed by Video ID when available,
     otherwise by Title.
 
-    Output example:
-    {
-        "VID::abc123": {"page_id": "...", "title": "...", "video_id": "..."},
-        "TITLE::My Episode Title": {"page_id": "...", "title": "...", "video_id": ""},
-    }
+    Stores the full Notion row so we can compare before updating.
     """
     rows = query_all_notion_rows(DATABASE_ID)
-    lookup: Dict[str, Dict[str, str]] = {}
+    lookup: Dict[str, Dict[str, Any]] = {}
 
     for row in rows:
         page_id = row.get("id", "")
 
-        # Title
         title_prop = row["properties"].get("Title", {}).get("title", [])
         title = "".join(part.get("plain_text", "") for part in title_prop).strip()
 
-        # Video ID
         video_prop = row["properties"].get("Video ID", {}).get("rich_text", [])
         video_id = "".join(part.get("plain_text", "") for part in video_prop).strip()
 
@@ -660,6 +804,7 @@ def get_existing_notion_pages() -> Dict[str, Dict[str, str]]:
             "page_id": page_id,
             "title": title,
             "video_id": video_id,
+            "row": row,
         }
 
         if video_id:
@@ -670,10 +815,9 @@ def get_existing_notion_pages() -> Dict[str, Dict[str, str]]:
 
     return lookup
 
-
 def update_row_in_notion(page_id: str, row: Dict[str, str]) -> None:
     """
-    Update only automation-owned fields for an existing Notion row.
+    Update automation-owned fields for an existing Notion row.
     Leaves manual curation fields untouched:
     - Pillar
     - Episode Number
@@ -687,6 +831,10 @@ def update_row_in_notion(page_id: str, row: Dict[str, str]) -> None:
     client = get_notion_client()
 
     properties = {
+        "Title": {
+            "title": safe_title(row.get("Title", ""))
+        },
+
         "Publish Date": {
             "date": {"start": pretty_to_iso(row.get("Publish Date", ""))}
             if row.get("Publish Date") else None
@@ -726,19 +874,74 @@ def update_row_in_notion(page_id: str, row: Dict[str, str]) -> None:
         properties=properties
     )
 
+# def sync_rows_to_notion(rows: List[Dict[str, str]]) -> Dict[str, int]:
+#     """
+#     Sync rows to Notion.
+
+#     - Insert missing rows
+#     - Update existing rows for automation-owned fields
+
+#     Matching priority:
+#     1. Video ID
+#     2. Title
+
+#     Returns:
+#         {"inserted": X, "updated": Y}
+#     """
+#     if not notion_ready():
+#         raise ValueError("Notion is not configured. Check NOTION_TOKEN and DATABASE_ID.")
+
+#     existing_lookup = get_existing_notion_pages()
+
+#     inserted = 0
+#     updated = 0
+
+#     for row in rows:
+#         title = (row.get("Title", "") or "").strip()
+#         video_id = (row.get("Video ID", "") or "").strip()
+
+#         match = None
+
+#         if video_id and f"VID::{video_id}" in existing_lookup:
+#             match = existing_lookup[f"VID::{video_id}"]
+#         elif title and f"TITLE::{title}" in existing_lookup:
+#             match = existing_lookup[f"TITLE::{title}"]
+
+#         if match:
+#             update_row_in_notion(match["page_id"], row)
+#             updated += 1
+#         else:
+#             add_row_to_notion(row)
+#             inserted += 1
+
+#             # update in-memory lookup so duplicates in same run don't insert twice
+#             new_record = {
+#                 "page_id": "",
+#                 "title": title,
+#                 "video_id": video_id,
+#             }
+
+#             if video_id:
+#                 existing_lookup[f"VID::{video_id}"] = new_record
+#             if title:
+#                 existing_lookup[f"TITLE::{title}"] = new_record
+
+#     return {"inserted": inserted, "updated": updated}
+
+
 def sync_rows_to_notion(rows: List[Dict[str, str]]) -> Dict[str, int]:
     """
     Sync rows to Notion.
 
     - Insert missing rows
-    - Update existing rows for automation-owned fields
+    - Update existing rows only when automation-owned fields changed
 
     Matching priority:
     1. Video ID
     2. Title
 
     Returns:
-        {"inserted": X, "updated": Y}
+        {"inserted": X, "updated": Y, "skipped": Z}
     """
     if not notion_ready():
         raise ValueError("Notion is not configured. Check NOTION_TOKEN and DATABASE_ID.")
@@ -747,10 +950,11 @@ def sync_rows_to_notion(rows: List[Dict[str, str]]) -> Dict[str, int]:
 
     inserted = 0
     updated = 0
+    skipped = 0
 
     for row in rows:
-        title = (row.get("Title", "") or "").strip()
-        video_id = (row.get("Video ID", "") or "").strip()
+        title = norm(row.get("Title", ""))
+        video_id = norm(row.get("Video ID", ""))
 
         match = None
 
@@ -760,26 +964,20 @@ def sync_rows_to_notion(rows: List[Dict[str, str]]) -> Dict[str, int]:
             match = existing_lookup[f"TITLE::{title}"]
 
         if match:
-            update_row_in_notion(match["page_id"], row)
-            updated += 1
+            if row_needs_update(match["row"], row):
+                update_row_in_notion(match["page_id"], row)
+                updated += 1
+            else:
+                skipped += 1
         else:
             add_row_to_notion(row)
             inserted += 1
 
-            # update in-memory lookup so duplicates in same run don't insert twice
-            new_record = {
-                "page_id": "",
-                "title": title,
-                "video_id": video_id,
-            }
-
-            if video_id:
-                existing_lookup[f"VID::{video_id}"] = new_record
-            if title:
-                existing_lookup[f"TITLE::{title}"] = new_record
-
-    return {"inserted": inserted, "updated": updated}
-
+    return {
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+    }
 
 # =========================================================
 # PRESERVE MANUAL FIELDS
@@ -900,15 +1098,39 @@ def finalize_formats(row: Dict[str, str]) -> None:
 # CLASSIFICATION FUNCTIONS   
 # =========================================================
 
-def detect_series(format_name: str) -> str:
+def detect_format(title: str, duration_seconds: int, is_short: bool) -> str:
+    """
+    Detect the correct Format classification.
+    Title rules override duration rules.
+    """
 
+    title_lower = (title or "").lower()
+
+    # Podcast Insight override (highest priority)
+    if "podcast insights:" in title_lower:
+        return "Podcast Clip"
+
+    # Shorts
+    if is_short:
+        return "YouTube Short"
+
+    # Longform YouTube podcast
+    if duration_seconds > 600:
+        return "Podcast Video (YouTube)"
+
+    # fallback
+    return "Special Video"
+
+def detect_series(format_name: str, title: str) -> str:
+
+    title_lower = (title or "").lower()
     format_name = (format_name or "").strip()
+
+    if "podcast insights:" in title_lower:
+        return "Podcast Insight"
 
     if format_name in {"Podcast Video (YouTube)", "Podcast Audio (Podbean)"}:
         return "The Liberating River"
-
-    if format_name == "Podcast Clip":
-        return "Podcast Insight"
 
     if format_name == "YouTube Short":
         return "The Book of Flo"
@@ -985,9 +1207,10 @@ def main() -> None:
 
     try:
         if notion_ready():
-            sync_results = sync_rows_to_notion(rows)
-            print(f"Inserted {sync_results['inserted']} new row(s) into Notion.")
-            print(f"Updated {sync_results['updated']} existing row(s) in Notion.")
+            sync_result = sync_rows_to_notion(rows)
+            print(f"Inserted {sync_result['inserted']} new row(s) into Notion.")
+            print(f"Updated {sync_result['updated']} existing row(s) in Notion.")
+            print(f"Skipped {sync_result['skipped']} unchanged row(s) in Notion.")
         else:
             print("Notion not configured; skipping Notion sync.")
 
